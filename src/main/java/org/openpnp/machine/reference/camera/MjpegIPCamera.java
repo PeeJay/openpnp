@@ -19,56 +19,73 @@
 
 package org.openpnp.machine.reference.camera;
 
-import java.awt.Dimension;
+import com.github.sarxos.webcam.Webcam;
+import com.github.sarxos.webcam.WebcamCompositeDriver;
+import com.github.sarxos.webcam.WebcamDevice;
+import com.github.sarxos.webcam.WebcamImageTransformer;
+import com.github.sarxos.webcam.ds.buildin.WebcamDefaultDriver;
+import com.github.sarxos.webcam.ds.ipcam.IpCamDevice;
+import com.github.sarxos.webcam.ds.ipcam.IpCamDeviceRegistry;
+import com.github.sarxos.webcam.ds.ipcam.IpCamDriver;
+import com.github.sarxos.webcam.ds.ipcam.IpCamMode;
+import com.github.sarxos.webcam.util.jh.JHGrayFilter;
+import org.openpnp.CameraListener;
+import org.openpnp.gui.support.Wizard;
+import org.openpnp.machine.reference.ReferenceCamera;
+import org.openpnp.machine.reference.camera.wizards.MjpegIPCameraConfigurationWizard;
+import org.openpnp.spi.PropertySheetHolder;
+import org.simpleframework.xml.Attribute;
+
+import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import javax.swing.Action;
-
-import com.github.sarxos.webcam.WebcamDevice;
-import com.github.sarxos.webcam.ds.buildin.WebcamDefaultDevice;
-import org.openpnp.CameraListener;
-import org.openpnp.gui.support.Wizard;
-import org.openpnp.machine.reference.ReferenceCamera;
-import org.openpnp.machine.reference.camera.wizards.WebcamConfigurationWizard;
-import org.openpnp.spi.PropertySheetHolder;
-import org.simpleframework.xml.Attribute;
-
-import com.github.sarxos.webcam.Webcam;
-import com.github.sarxos.webcam.WebcamImageTransformer;
-import com.github.sarxos.webcam.util.jh.JHGrayFilter;
-
-
 
 /**
  * A Camera implementation based on the webcam-capture library
  */
-public class Webcams extends ReferenceCamera implements Runnable, WebcamImageTransformer {
+public class MjpegIPCamera extends ReferenceCamera implements Runnable, WebcamImageTransformer {
 
     @Attribute(required = false)
     protected String deviceId = "###DEVICE###";
+    @Attribute (required = false)
+    protected String ipCamUrl = "http://127.0.0.1/image_stream";
 
-    @Attribute(required = false)
-    private int preferredWidth = 0;
-    @Attribute(required = false)
-    private int preferredHeight = 0;
-
-    protected Webcam webcam;
+    protected Webcam ipCam;
     private Thread thread;
     private boolean forceGray;
     private BufferedImage image;
 
     private static final JHGrayFilter GRAY = new JHGrayFilter();
 
+    //Create composite IP Cam/Internal cam driver
+    public static class MyCompositeDriver extends WebcamCompositeDriver {
+        public MyCompositeDriver() {
+            add(new WebcamDefaultDriver());
+            add(new IpCamDriver());
+        }
+    }
+
+    // register custom composite driver
+    static {
+        Webcam.setDriver(new MyCompositeDriver());
+    }
 
     @Override
     public BufferedImage transform(BufferedImage image) {
         return GRAY.filter(image, null);
     }
 
-    public Webcams() {
+    public MjpegIPCamera() {
+        try {
+            IpCamDeviceRegistry.register("Pi Cam", "http://192.168.0.220:8080/?action=stream_1", IpCamMode.PUSH);
+            IpCamDeviceRegistry.register("USB Cam", "http://192.168.0.220:8080/?action=stream_0", IpCamMode.PUSH);
+        }
+        catch (Exception e) {
+            //Do something here?
+        }
 
     }
 
@@ -81,7 +98,7 @@ public class Webcams extends ReferenceCamera implements Runnable, WebcamImageTra
             return null;
         }
         try {
-            BufferedImage img = webcam.getImage();
+            BufferedImage img = ipCam.getImage();
             return transformImage(img);
         }
         catch (Exception e) {
@@ -131,30 +148,27 @@ public class Webcams extends ReferenceCamera implements Runnable, WebcamImageTra
         if (thread != null) {
             thread.interrupt();
             try {
-                thread.join(3000);
+                thread.join();
             }
             catch (Exception e) {
                 e.printStackTrace();
             }
             thread = null;
-            webcam.close();
+            ipCam.close();
         }
         try {
-            webcam = null;
+            ipCam = null;
             for (Webcam cam : Webcam.getWebcams()) {
                 if (cam.getName().equals(deviceId)) {
-                    webcam = cam;
+                    ipCam = cam;
                 }
             }
-            if (webcam == null) {
+            if (ipCam == null) {
                 return;
             }
-            if (preferredWidth != 0 && preferredHeight != 0) {
-                webcam.setViewSize(new Dimension(preferredWidth, preferredHeight));
-            }
-            webcam.open();
+            ipCam.open();
             if (forceGray) {
-                webcam.setImageTransformer(this);
+                ipCam.setImageTransformer(this);
             }
         }
         catch (Exception e) {
@@ -162,7 +176,6 @@ public class Webcams extends ReferenceCamera implements Runnable, WebcamImageTra
             return;
         }
         thread = new Thread(this);
-        thread.setDaemon(true);
         thread.start();
     }
 
@@ -174,26 +187,19 @@ public class Webcams extends ReferenceCamera implements Runnable, WebcamImageTra
         return forceGray;
     }
 
-    public int getPreferredWidth() {
-        return preferredWidth;
+    public String getIPCamUrl() {
+        return ipCamUrl;
     }
 
-    public void setPreferredWidth(int preferredWidth) {
-        this.preferredWidth = preferredWidth;
+    public void setIPCamUrl(String ipCamUrl) {
+        this.ipCamUrl = ipCamUrl;
     }
 
-    public int getPreferredHeight() {
-        return preferredHeight;
-    }
-
-    public void setPreferredHeight(int preferredHeight) {
-        this.preferredHeight = preferredHeight;
-    }
 
 
     @Override
     public Wizard getConfigurationWizard() {
-        return new WebcamConfigurationWizard(this);
+        return new MjpegIPCameraConfigurationWizard(this);
     }
 
     @Override
@@ -203,6 +209,7 @@ public class Webcams extends ReferenceCamera implements Runnable, WebcamImageTra
 
     @Override
     public PropertySheetHolder[] getChildPropertySheetHolders() {
+        // TODO Auto-generated method stub
         return null;
     }
 
@@ -210,9 +217,9 @@ public class Webcams extends ReferenceCamera implements Runnable, WebcamImageTra
     public List<String> getDeviceIds() throws Exception {
         ArrayList<String> deviceIds = new ArrayList<>();
         for (Webcam cam : Webcam.getWebcams()) {
-            //Only add normal Cameras to this list
+            //Only add IP Cameras to this list
             WebcamDevice dev = cam.getDevice();
-            if(dev instanceof WebcamDefaultDevice) {
+            if(dev instanceof IpCamDevice) {
                 deviceIds.add(cam.getName());
             }
         }
@@ -226,12 +233,12 @@ public class Webcams extends ReferenceCamera implements Runnable, WebcamImageTra
         if (thread != null) {
             thread.interrupt();
             try {
-                thread.join(3000);
+                thread.join();
             }
             catch (Exception e) {
 
             }
-            webcam.close();
+            ipCam.close();
         }
     }
 }
